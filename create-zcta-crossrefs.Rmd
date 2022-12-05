@@ -1,0 +1,203 @@
+---
+title: "Create ZCTA Crossrefs"
+author: "Tyler Schappe"
+date: "2022-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+options(tigris_use_cache = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(tigris)
+library(sf)
+```
+
+# Merging ZCTAs with CTs
+
+**Notes:**
+
+  - We will be given a patient ZIP
+  - This can correspond to a ZCTA, which is a collection of census blocks
+  - We want to use a deprivation index at the census tract level
+  - The problem is there are multiple CTs per ZCTA
+  - US Census has a cross-ref file but it is one ZCTA to all overlapping CTs, with no indication for how much they overlap
+
+**Approach:** Our approach is to loop over census tracts and find the ZCTA for which it spatially overlaps most. 
+
+## Test on Just 2 ZIPs
+
+### ZCTA Polygons
+
+Get ZCTA polygons
+```{r}
+zcta.cary <- tigris::zctas(starts_with = "2751")
+zcta.cary <- zcta.cary[zcta.cary$ZCTA5CE20 %in% c("27518", "27511") ,]
+```
+
+Project to US Albers and make valid
+```{r}
+zcta.cary <-
+  zcta.cary %>%
+  st_transform(crs = "EPSG:5070") %>%
+  st_make_valid()
+```
+
+### Census Tracts
+
+Get CT polygons in NC
+```{r}
+ct.nc <- tigris::tracts(state = "NC", year = 2020)
+```
+
+Project to US Albers and make valid
+```{r}
+ct.nc <- 
+  ct.nc %>%
+  st_transform(crs = "EPSG:5070") %>%
+  st_make_valid()
+```
+
+
+### Join Without "Largest"
+
+This is just to visualize a basic join.
+
+```{r}
+zcta.cary.ct <- st_join(zcta.cary, ct.nc)
+```
+
+#### Map
+
+```{r}
+ggplot(data = zcta.cary.ct)+
+  #27518
+  geom_sf(data = zcta.cary.ct[zcta.cary.ct$ZCTA5CE20 == "27518",],
+          fill = "red",
+          alpha = 0.01
+  )+
+  geom_sf(data = ct.nc[ct.nc$GEOID %in% zcta.cary.ct$GEOID[zcta.cary.ct$ZCTA5CE20 == "27518"] ,],
+          fill = "blue",
+          alpha = 0.1
+  )+
+  #27511
+  geom_sf(data = zcta.cary.ct[zcta.cary.ct$ZCTA5CE20 == "27511",],
+          fill = "yellow",
+          alpha = 0.01
+  )+
+  geom_sf(data = ct.nc[ct.nc$GEOID %in% zcta.cary.ct$GEOID[zcta.cary.ct$ZCTA5CE20 == "27511"] ,],
+          fill = "red",
+          alpha = 0.1
+  )
+```
+
+```{r}
+sum(duplicated(zcta.cary.ct$GEOID))
+```
+
+**Result:** CTs that overlap both ZCTAs were assigned to both
+
+### Join With "Largest"
+
+**Note:** We have the ZCTAs listed first in the join.
+
+```{r}
+zcta.cary.ct.largest <- st_join(zcta.cary, ct.nc, largest = TRUE)
+```
+
+#### Map
+
+```{r}
+ggplot(data = zcta.cary.ct.largest)+
+  #27518
+  geom_sf(data = zcta.cary.ct.largest[zcta.cary.ct.largest$ZCTA5CE20 == "27518",],
+          fill = "red",
+          alpha = 0.01
+  )+
+  geom_sf(data = ct.nc[ct.nc$GEOID %in% zcta.cary.ct.largest$GEOID[zcta.cary.ct.largest$ZCTA5CE20 == "27518"] ,],
+          fill = "blue",
+          alpha = 0.1
+  )+
+  #27511
+  geom_sf(data = zcta.cary.ct.largest[zcta.cary.ct.largest$ZCTA5CE20 == "27511",],
+          fill = "yellow",
+          alpha = 0.01
+  )+
+  geom_sf(data = ct.nc[ct.nc$GEOID %in% zcta.cary.ct.largest$GEOID[zcta.cary.ct.largest$ZCTA5CE20 == "27511"] ,],
+          fill = "red",
+          alpha = 0.1
+  )
+```
+
+**Result:** Since we have the ZCTAs listed first, "largest" finds the CT that overlaps each ZCTA most (ie. only 2 CTs). This is not what we want -- we need to switch the order.
+
+
+
+### Inverse Join With "Largest"
+
+**Note:** We put the CTs first in the join so that "largest" finds the ZCTA that overlaps each CT most.
+
+```{r}
+ct.nc.cary.zcta <- st_join(ct.nc, zcta.cary, largest = TRUE)
+
+ct.nc.cary.zcta <- ct.nc.cary.zcta[!is.na(ct.nc.cary.zcta$ZCTA5CE20) ,]
+```
+
+#### Map
+
+```{r}
+ggplot(data = ct.nc.cary.zcta)+
+  #27518
+  geom_sf(data = zcta.cary[zcta.cary$ZCTA5CE20 == "27518",],
+          fill = "red",
+          alpha = 0.1
+  )+
+  geom_sf(data = ct.nc.cary.zcta[ct.nc.cary.zcta$GEOID %in% ct.nc.cary.zcta$GEOID[ct.nc.cary.zcta$ZCTA5CE20 == "27518"] ,],
+          fill = "blue",
+          alpha = 0.1
+  )+
+  #27511
+  geom_sf(data = zcta.cary[zcta.cary$ZCTA5CE20 == "27511",],
+          fill = "green",
+          alpha = 0.1
+  )+
+  geom_sf(data = ct.nc.cary.zcta[ct.nc.cary.zcta$GEOID %in% ct.nc.cary.zcta$GEOID[ct.nc.cary.zcta$ZCTA5CE20 == "27511"] ,],
+          fill = "yellow",
+          alpha = 0.1
+  )+
+  theme_bw()
+```
+
+Look for CT GEOIDs
+```{r}
+sum(duplicated(ct.nc.cary.zcta$GEOID))
+```
+
+**Result:** It works -- use this.
+
+```{r}
+ggplot(data = ct.nc.cary.zcta)+
+  #27518
+  # geom_sf(data = zcta.cary[zcta.cary$ZCTA5CE20 == "27518",],
+  #         fill = "red",
+  #         alpha = 0.1
+  # )+
+  # geom_sf(data = ct.nc.cary.zcta[ct.nc.cary.zcta$GEOID %in% ct.nc.cary.zcta$GEOID[ct.nc.cary.zcta$ZCTA5CE20 == "27518"] ,],
+  #         fill = "blue",
+  #         alpha = 0.1
+  # )+
+  #27511
+  geom_sf(data = zcta.cary[zcta.cary$ZCTA5CE20 == "27511",],
+          fill = "green",
+          alpha = 0.1
+  )+
+  geom_sf(data = ct.nc.cary.zcta[ct.nc.cary.zcta$GEOID %in% ct.nc.cary.zcta$GEOID[ct.nc.cary.zcta$ZCTA5CE20 == "27511"] ,],
+          fill = "yellow",
+          alpha = 0.1
+  )
+```
+
